@@ -1,0 +1,70 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"log"
+	"time"
+	"os/signal"
+	cluster "github.com/bsm/sarama-cluster"
+)
+
+func main() {
+	//cluster.Config 是一个配置的结构体
+	var config *cluster.Config
+	
+	//cluster.NewConfig() 返回一个指向cluster.Config的结构体指针
+	config = cluster.NewConfig()
+	//当有错误时会将错误发到　err chan中
+	config.Consumer.Return.Errors = true
+	//当组内发生负载平衡时，是否通知，默认不通知。
+	config.Group.Return.Notifications = true
+
+	//默认从topic分区的最旧的地方开始消费
+	// -1 sarama.OffsetNewest
+	// -2 sarama.OffsetOldest
+	config.Consumer.Offsets.Initial = -2
+
+	//设置offsets默认的提交时间
+	config.Consumer.Offsets.CommitInterval = time.Second
+
+
+	brokers := []string{"localhost:9092"}
+	topics := []string{"go-test"}
+
+	consumer, err := cluster.NewConsumer(brokers, "go-test-group-1", topics, config)
+	if err != nil {
+		panic(err)
+	}
+	defer consumer.Close()
+
+	//捕获SIGINT来触发一个正常的关闭
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt) //向signals通道中发一个os.Interrupt的信号
+
+	//consume errors
+	go func(){
+		for err := range consumer.Errors() {
+			log.Printf("Error: %s\n", err.Error())
+		}
+	}()
+
+	//consume notifications
+	go func(){
+		for ntf := range consumer.Notifications() {
+			log.Printf("Rebalanced: %+v\n", ntf)
+		}
+	}()
+
+	//consume messages, watch signals
+	for {
+		select {
+			case msg := <-consumer.Messages():
+				fmt.Fprintf(os.Stdout, "Topic = %s  Partition = %d  Offset = %d  message = %s\n",
+						msg.Topic, msg.Partition, msg.Offset, string(msg.Value))
+				consumer.MarkOffset(msg, "")	//将该消息设置为已经消费
+			case <-signals:
+				return
+		}
+	}
+}

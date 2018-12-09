@@ -1,0 +1,131 @@
+package main
+
+//sarama 不支持组内的自动平衡，和offset管理。所以下面这个只是练习使用。
+//　应该使用sarama-cluster
+import (
+	"fmt"
+	"time"
+	"strings"
+	"github.com/Shopify/sarama"
+)
+
+var (
+	kafka_brokers string = "localhost:9092"
+)
+
+// sarama.SyncProducer 是一个接口，同样的sarama.AsyncProducer也是一个接口
+// sarama.Config 是一个结构体
+func NewSyncKafkaProducer() sarama.SyncProducer {
+	//拼接brokers的地址
+	broker_list := strings.Split(kafka_brokers, ",")
+	//返回一个config结构体的指针
+	config := sarama.NewConfig()
+	config.ClientID = "go-test-producer-01"
+
+	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.Retry.Max = 5
+	config.Producer.Return.Successes = true
+
+	//接收一个[]string类型的broker地址，和一个*config类型的配置，然后返回一个SyncProducer接口的变量　和错误
+	producer, err := sarama.NewSyncProducer(broker_list, config)
+	if err != nil {
+		fmt.Println("创建producer失败, err = ", err)
+	}
+	return producer
+
+}
+
+func NewKafkaConsumer() sarama.Consumer {
+	broker_list := strings.Split(kafka_brokers, ",")
+
+	config := sarama.NewConfig()
+	config.ClientID = "go-test-consumer-01"
+	//在内部和外部的channel中，缓冲多少个event。这允许producer, consumer在后台持续的处理消息，这将极大的提高了吞吐量。
+	config.ChannelBufferSize = 256
+	//多长时间更新一次Offset
+	config.Consumer.Offsets.CommitInterval = 1 * time.Second
+	config.Consumer.Offsets.Retry.Max = 3
+	config.Consumer.Offsets.Initial = sarama.OffsetOldest	//设置默认从topic的哪个位置消费，默认是sarama.OffsetNewest
+
+	//生成一个consumer, 注意consumer的类型也是接口
+	consumer, err := sarama.NewConsumer(broker_list, config)
+	if err != nil {
+		panic(fmt.Sprintf("创建消费者失败，err = %v", err))
+	}
+	return consumer
+}
+
+
+func ConsumeMessages(pc sarama.PartitionConsumer, c chan int) {
+	defer pc.AsyncClose()
+	for {
+		select {
+		case msg := <-pc.Messages():
+			fmt.Printf("从Topic: %s 的 %d 号分区中，第 %d 处消费了一条消息：%s\n", 
+				msg.Topic, msg.Partition, msg.Offset, string(msg.Value) )
+			case err := <-pc.Errors():
+				fmt.Println("消费消息出错了，err = ",err)
+				c<- 1
+				return
+		}
+	}
+	
+}
+
+func main() {
+	//syncProducer上面提到了是一个接口，该接口有三个方法：
+	// SendMessage(msg *ProducerMessage) (partition int32, offset int64, err error)
+	// SendMessages(msgs []*ProducerMessage) error
+	// Close() error
+	syncProducer := NewSyncKafkaProducer()
+	defer syncProducer.Close()
+
+	//发送一个消息到kafka的go-test topic中
+	//在发送前需要先构造一个ProducerMessage 结构体
+	msg := &sarama.ProducerMessage{
+		Topic: "go-test",
+		Value: sarama.StringEncoder("test 123"),
+	}
+
+	//发送消息到broker中
+	partition, offset, err := syncProducer.SendMessage(msg)
+	if err != nil {
+		fmt.Println("发送消息到broker失败，err = ", err)
+	} else {
+		fmt.Printf("成功发送消息到partition: %d, offset = %d\n", partition, offset)
+	}
+
+
+
+	//从kafka中消费消息
+	consumer := NewKafkaConsumer()
+	defer consumer.Close()
+
+	//获取目标topic的分区数目
+	topic := "go-test"
+	partitionList, _ := consumer.Partitions(topic)
+	fmt.Printf("Topic: %s 有%d个分区\n", topic, len(partitionList))
+
+	//对每个分区创建一个partitionConsumer
+	done := make(chan int, len(partitionList))
+	for _, n := range partitionList {
+		pconsumer, err := consumer.ConsumePartition(topic, n, sarama.OffsetNewest)
+		if err != nil {
+			panic(fmt.Sprintf("创建partitionConsumer失败，err = %v\n", err))
+		}
+		go ConsumeMessages(pconsumer, done)
+	}
+
+
+	// time.Sleep(time.Minute)
+	doneCount := 0
+	for {
+		select {
+		case _ = <-done:
+			doneCount++
+			if doneCount == len(partitionList) {
+				return
+			}
+		}
+	}
+}
