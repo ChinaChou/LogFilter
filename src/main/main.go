@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"regexp"
 	"LogFilter/src/consumer"
 	"LogFilter/src/producer"
 	"github.com/Shopify/sarama"
@@ -13,7 +14,8 @@ import (
 
 var (
 	srcTopics = []string{"aixue-qa-logs", "aixue-uat-logs", "aixue-prod-logs"}
-	dstTopics = []string{"aixue-qa-logEntry", "aixue-uat-logEntry", "aixue-prod-logEntry"}
+	filterRules = []string{`^127\.0\.0\.1 - .*?"[A-Z]{3,7} /index.php" \d{3}$`, `(?i:error)`}
+	regexpList []*regexp.Regexp
 )
 
 
@@ -50,9 +52,24 @@ func ConsumeTopicMessages(c *cluster.Consumer, p sarama.SyncProducer, e <-chan i
 						msg.Offset, string(msg.Value))
 			//先确定消息已经消费
 			c.MarkOffset(msg, "")
-			//再把该消息发送到dstTopic中
-			//构造producer消息
-			go ProduceMessage(msg, p)
+			//然后对消息进行过滤
+			// 1、丢掉127.0.0.1开头的无用访问日志
+			// 2、挑选出带有err, error的日志，并将其发送到redis中；
+			if pos, res := Filter(msg); res {
+				switch pos {
+				case 0:
+					//匹配 `^127.0.0.1`
+					fmt.Printf("丢弃消息{ %s }\n", string(msg.Value))
+				case 1:
+					//匹配 `(?i:error)`
+					// sendMsgToRedis
+					fmt.Printf("将消息{ %s }发住redis中\n", string(msg.Value))
+				}
+			}else {
+				//未匹配，再把该消息发送到dstTopic中
+				fmt.Printf("消息{ %v }正常通过\n", string(msg.Value))
+				go ProduceMessage(msg, p)
+			}
 		case <-e:
 			fmt.Println("收到退出信息，准备退出>>>")
 			return
@@ -60,6 +77,8 @@ func ConsumeTopicMessages(c *cluster.Consumer, p sarama.SyncProducer, e <-chan i
 	}
 }
 
+
+//重新将日志发送到目标topic中供logstash消费存入elasticsearch中
 func ProduceMessage(msg *sarama.ConsumerMessage, p sarama.SyncProducer) {
 	pmsg := &sarama.ProducerMessage{
 		Topic: fmt.Sprintf("%s-pure", msg.Topic),
@@ -74,9 +93,26 @@ func ProduceMessage(msg *sarama.ConsumerMessage, p sarama.SyncProducer) {
 	}
 }
 
+//过虑日志
+func Filter(msg *sarama.ConsumerMessage) (pos int, res bool) {
+	//遍历正则列表，对消息进行匹配，匹配上就返回true, 否则false
+	// msg是一个sarama.ConsumerMessage的结构体，消息存储在msg.Value中，它是一个[]byte
+	//　所以需要使用reg.Match来匹配，如果是字符串就使用reg.MatchString
+	for idx, reg := range regexpList {
+		if res := reg.Match(msg.Value); res {
+			return idx, true
+		}
+	}
+	return -1, false
+}
 
 
 func main(){
+	//编译正则表达式，存入正则列表
+	for _, v := range filterRules {
+		regexpList = append(regexpList, regexp.MustCompile(v))
+	}
+
 	//捕获os.Interrupt信号，在消费时如果捕获到，就正常退出
 	//这里会根据srcTopics的数量去启动相应数量的Consumer，所以需要每一个conSumer都需要通知。
 	signals := make(chan os.Signal, 1)
@@ -89,7 +125,7 @@ func main(){
 
 	//创建对应的生产者
 	producerList := []sarama.SyncProducer{}
-	for _, _ = range dstTopics {
+	for _, _ = range srcTopics {
 		p := producer.NewKafkaProducer()
 		producerList = append(producerList, p)
 	}
