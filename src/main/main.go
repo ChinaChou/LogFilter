@@ -10,24 +10,30 @@ import (
 	"LogFilter/src/producer"
 	"github.com/Shopify/sarama"
 	cluster "github.com/bsm/sarama-cluster"
+	"github.com/go-redis/redis"
 )
 
 var (
 	srcTopics = []string{"aixue-qa-logs", "aixue-uat-logs", "aixue-prod-logs"}
-	filterRules = []string{`^127\.0\.0\.1 - .*?"[A-Z]{3,7} /index.php" \d{3}$`, `(?i:error)`}
+	filterRules = []string{
+		`^127\.0\.0\.1 - .*?"[A-Z]{3,7} /index.php" \d{3}$`, 
+		`(?i:error)`,
+	}
 	regexpList []*regexp.Regexp
+	redisClient *redis.Client
 )
 
 
 //从特定的topic消费消息
-func ConsumeTopicMessages(c *cluster.Consumer, p sarama.SyncProducer, e <-chan int, d chan<- int) {
+func ConsumeTopicMessages(c *cluster.Consumer, p sarama.SyncProducer, e <-chan int, d chan<- int, redisClient *redis.Client) {
 	//在函数返回前向任务队列中放一个数，表示该Consumer已经退出
 	defer func() {
-		fmt.Println("开始执行关闭consumer的任务..")
+		log.Println("开始执行关闭consumer的任务..")
 		d <- 1
 		c.Close()
 		p.Close()
-		fmt.Println("Consumer关闭任务执行完成...")
+		redisClient.Close()
+		log.Println("Consumer关闭任务执行完成...")
 	}()
 
 	//消费Notification
@@ -59,19 +65,20 @@ func ConsumeTopicMessages(c *cluster.Consumer, p sarama.SyncProducer, e <-chan i
 				switch pos {
 				case 0:
 					//匹配 `^127.0.0.1`
-					fmt.Printf("丢弃消息{ %s }\n", string(msg.Value))
+					log.Printf("丢弃消息{ %s }\n", string(msg.Value))
 				case 1:
 					//匹配 `(?i:error)`
 					// sendMsgToRedis
-					fmt.Printf("将消息{ %s }发住redis中\n", string(msg.Value))
+					log.Printf("将消息{ %s }发住redis中\n", string(msg.Value))
+					redisClient.LPush("console-error", string(msg.Value))
 				}
 			}else {
 				//未匹配，再把该消息发送到dstTopic中
-				fmt.Printf("消息{ %v }正常通过\n", string(msg.Value))
+				log.Printf("消息{ %v }正常通过\n", string(msg.Value))
 				go ProduceMessage(msg, p)
 			}
 		case <-e:
-			fmt.Println("收到退出信息，准备退出>>>")
+			log.Println("收到退出信息，准备退出>>>")
 			return
 		}
 	}
@@ -113,6 +120,12 @@ func main(){
 		regexpList = append(regexpList, regexp.MustCompile(v))
 	}
 
+	//初始化redisClient
+	redisClient = redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+		Password: "",
+		DB: 0,
+	})
 	//捕获os.Interrupt信号，在消费时如果捕获到，就正常退出
 	//这里会根据srcTopics的数量去启动相应数量的Consumer，所以需要每一个conSumer都需要通知。
 	signals := make(chan os.Signal, 1)
@@ -129,12 +142,12 @@ func main(){
 		p := producer.NewKafkaProducer()
 		producerList = append(producerList, p)
 	}
-	log.Println(producerList)
+	// log.Println(producerList)
 
 	//从srcTopics中消费消息，
 	for i, t := range srcTopics {
 		c := consumer.NewKafkaConsumer(fmt.Sprintf("%v-0", t), append([]string{}, t))
-		go ConsumeTopicMessages(c, producerList[i], exitChan, done)
+		go ConsumeTopicMessages(c, producerList[i], exitChan, done, redisClient)
 	}
 
 
@@ -144,12 +157,12 @@ func main(){
 	for {
 		select {
 		case <-signals:
-			fmt.Println("ctrl＋c ...")
+			// log.Println("ctrl＋c ...")
 			exitChan<-1
 		case <-done:
 			count++
 			if count == len(srcTopics) {
-				fmt.Println("所有的Producer和Consumer都已经退出，主程序也退出...")
+				log.Println("所有的Producer和Consumer都已经退出，主程序也退出...")
 				return
 			}
 			exitChan<-1

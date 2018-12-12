@@ -50,6 +50,23 @@
   version = "v1.1.0"
 
 [[projects]]
+  digest = "1:34a9a60fade37f8009ed4a19e02924198aba3eabfcc120ee5c6002b7de17212d"
+  name = "github.com/go-redis/redis"
+  packages = [
+    ".",
+    "internal",
+    "internal/consistenthash",
+    "internal/hashtag",
+    "internal/pool",
+    "internal/proto",
+    "internal/singleflight",
+    "internal/util",
+  ]
+  pruneopts = "UT"
+  revision = "b3d9bf10f6666b2ee5100a6f3f84f4caf3b4e37d"
+  version = "v6.14.2"
+
+[[projects]]
   branch = "master"
   digest = "1:4a0c6bb4805508a6287675fac876be2ac1182539ca8a32468d8128882e9d5009"
   name = "github.com/golang/snappy"
@@ -79,6 +96,10 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  input-imports = ["github.com/bsm/sarama-cluster"]
+  input-imports = [
+    "github.com/Shopify/sarama",
+    "github.com/bsm/sarama-cluster",
+    "github.com/go-redis/redis",
+  ]
   solver-name = "gps-cdcl"
   solver-version = 1
