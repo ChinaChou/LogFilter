@@ -93,16 +93,17 @@ func ConsumeTopicMessages(c *cluster.Consumer, p sarama.SyncProducer, e <-chan i
 				switch pos {
 				case 0:
 					//匹配 `^127.0.0.1`
-					log.Printf("丢弃消息{ %s }\n", logEntry.Message)
+					// log.Printf("丢弃消息{ %s }\n", logEntry.Message)
+					log.Println("丢弃一条消息")
 				case 1:
 					//匹配 `(?i:error)`
 					// sendMsgToRedis
-					log.Printf("将消息{ %s }发住redis中\n", logEntry.Message)
+					// log.Printf("将消息{ %s }发住redis中\n", logEntry.Message)
 					redisClient.LPush("console-error", logEntry.Message)
 				}
 			}else {
 				//未匹配，再把该消息发送到dstTopic中
-				log.Printf("消息{ %v }正常通过\n", string(msg.Value))
+				// log.Printf("消息{ %v }正常通过\n", string(msg.Value))
 				go ProduceMessage(msg, p)
 			}
 		case <-e:
@@ -119,13 +120,11 @@ func ProduceMessage(msg *sarama.ConsumerMessage, p sarama.SyncProducer) {
 		Topic: fmt.Sprintf("%s-pure", msg.Topic),
 		Value: sarama.ByteEncoder(msg.Value), //将msg.Value转换成Encoder类型，这样才能当ProducerMessage的value使用
 	}
-	partition, offset, err := p.SendMessage(pmsg)
+	// partition, offset, err := p.SendMessage(pmsg)
+	_, _, err := p.SendMessage(pmsg)
 	if err != nil {
 		log.Println("发送消息到kafka失败， err = ", err)
-	} else {
-		log.Printf("成功将消息%s 发送到 topic= %s 的 %d 号分区的 %d 位置", string(msg.Value), pmsg.Topic,
-					partition, offset)
-	}
+	} 
 }
 
 //过虑日志
