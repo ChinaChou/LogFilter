@@ -1,3 +1,4 @@
 #!/bin/bash
 cd $GOPATH/src/LogFilter/
-go build -o ./bin/logfilter ./src/main/
+export GOOS=linux GOARCH=amd64
+go build -o ./bin/logfilter ./src/main/main.go

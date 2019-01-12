@@ -25,6 +25,18 @@
 #   unused-packages = true
 
 
+[[constraint]]
+  name = "github.com/Shopify/sarama"
+  version = "1.20.0"
+
+[[constraint]]
+  name = "github.com/bsm/sarama-cluster"
+  version = "2.1.15"
+
+[[constraint]]
+  name = "github.com/go-redis/redis"
+  version = "6.14.2"
+
 [prune]
   go-tests = true
   unused-packages = true
